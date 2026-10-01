@@ -43,12 +43,12 @@ async function main() {
   });
 
   try {
+    console.log('Starting Web Dashboard API...');
+    startApi(client);
+
     console.log('Logging in...');
     await client.login(config.token);
     console.log('Login function returned.');
-    
-    console.log('Starting Web Dashboard API...');
-    startApi(client);
   } catch (error) {
     console.error('Failed to login:', error);
     process.exit(1);
