@@ -31,7 +31,7 @@ router.get('/callback', async (req, res) => {
         grant_type: 'authorization_code',
         code,
         redirect_uri: config.redirectUri || '',
-      }),
+      }).toString(),
     });
 
     const tokenData = await tokenResponse.json();
