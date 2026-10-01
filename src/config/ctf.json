@@ -1,0 +1,16 @@
+{
+  "challenges": [
+    {
+      "name": "SQLi 101",
+      "category": "Web",
+      "points": 100,
+      "description": "Learn the basics of SQL Injection on our authorized lab target: http://lab.nullregion.test/sqli"
+    },
+    {
+      "name": "Buffer Overflow Intro",
+      "category": "Pwn",
+      "points": 200,
+      "description": "Exploit a simple buffer overflow. Download the binary at http://lab.nullregion.test/bof1.bin"
+    }
+  ]
+}
