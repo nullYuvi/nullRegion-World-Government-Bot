@@ -15,22 +15,34 @@ router.get('/login', (req, res) => {
   res.redirect(`https://discord.com/api/oauth2/authorize?${params.toString()}`);
 });
 
+const usedCodes = new Set<string>();
+
 router.get('/callback', async (req, res) => {
   const code = req.query.code as string;
   if (!code) {
     return res.status(400).json({ error: 'Code is required' });
   }
 
+  // Prevent duplicate concurrent/rapid requests for the same authorization code
+  if (usedCodes.has(code)) {
+    console.warn('Duplicate OAuth callback request detected.');
+    return res.redirect(process.env.FRONTEND_URL || '/');
+  }
+  usedCodes.add(code);
+  setTimeout(() => usedCodes.delete(code), 5 * 60 * 1000); // Cleanup after 5 minutes
+
   try {
+    const credentials = Buffer.from(`${config.clientId || ''}:${config.clientSecret || ''}`).toString('base64');
+    
     const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`,
+        'Accept': 'application/json',
         'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
       },
       body: new URLSearchParams({
-        client_id: config.clientId || '',
-        client_secret: config.clientSecret || '',
         grant_type: 'authorization_code',
         code,
         redirect_uri: config.redirectUri || '',
@@ -58,6 +70,7 @@ router.get('/callback', async (req, res) => {
     const userResponse = await fetch('https://discord.com/api/users/@me', {
       headers: { 
         authorization: `Bearer ${tokenData.access_token}`,
+        'Accept': 'application/json',
         'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
       },
     });
