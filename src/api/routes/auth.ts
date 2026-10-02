@@ -24,7 +24,10 @@ router.get('/callback', async (req, res) => {
   try {
     const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
+      },
       body: new URLSearchParams({
         client_id: config.clientId || '',
         client_secret: config.clientSecret || '',
@@ -34,17 +37,42 @@ router.get('/callback', async (req, res) => {
       }).toString(),
     });
 
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      const contentType = tokenResponse.headers.get('content-type') || 'unknown';
+      console.error(`OAuth Token Error [${tokenResponse.status}]: Content-Type: ${contentType}. Body: ${errorText.substring(0, 100)}...`);
+      return res.status(400).json({ error: 'Failed to exchange code due to upstream error' });
+    }
+
+    const contentType = tokenResponse.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      console.error(`OAuth Token Error: Expected JSON, got ${contentType}`);
+      return res.status(400).json({ error: 'Invalid response format from Discord' });
+    }
+
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
       return res.status(400).json({ error: tokenData.error_description || 'Failed to exchange code' });
     }
 
     const userResponse = await fetch('https://discord.com/api/users/@me', {
-      headers: { authorization: `Bearer ${tokenData.access_token}` },
+      headers: { 
+        authorization: `Bearer ${tokenData.access_token}`,
+        'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
+      },
     });
     
     if (!userResponse.ok) {
-       return res.status(400).json({ error: 'Failed to fetch user data' });
+       const userErrorText = await userResponse.text();
+       const userContentType = userResponse.headers.get('content-type') || 'unknown';
+       console.error(`OAuth User Data Error [${userResponse.status}]: Content-Type: ${userContentType}. Body: ${userErrorText.substring(0, 100)}...`);
+       return res.status(400).json({ error: 'Failed to fetch user data due to upstream error' });
+    }
+
+    const userContentType = userResponse.headers.get('content-type') || '';
+    if (!userContentType.includes('application/json')) {
+       console.error(`OAuth User Data Error: Expected JSON, got ${userContentType}`);
+       return res.status(400).json({ error: 'Invalid user data format from Discord' });
     }
 
     const userData = await userResponse.json();
