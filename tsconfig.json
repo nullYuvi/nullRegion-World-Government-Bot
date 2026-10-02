@@ -9,8 +9,7 @@
     "strict": true,
     "skipLibCheck": true,
     "typeRoots": ["./node_modules/@types"],
-    "types": ["jest"],
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "test/**/*", "index.ts"]
+  "include": ["src/**/*", "index.ts"]
 }
