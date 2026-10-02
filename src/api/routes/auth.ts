@@ -50,9 +50,34 @@ router.get('/callback', async (req, res) => {
     });
 
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
       const contentType = tokenResponse.headers.get('content-type') || 'unknown';
-      console.error(`OAuth Token Error [${tokenResponse.status}]: Content-Type: ${contentType}. Body: ${errorText.substring(0, 100)}...`);
+      let diagnosticMsg = `OAuth Token Error [${tokenResponse.status}]: Content-Type: ${contentType}.`;
+      
+      if (tokenResponse.status === 429) {
+        diagnosticMsg += `\nRate Limit Headers:`;
+        diagnosticMsg += `\nX-RateLimit-Scope: ${tokenResponse.headers.get('X-RateLimit-Scope') || 'N/A'}`;
+        diagnosticMsg += `\nX-RateLimit-Limit: ${tokenResponse.headers.get('X-RateLimit-Limit') || 'N/A'}`;
+        diagnosticMsg += `\nX-RateLimit-Remaining: ${tokenResponse.headers.get('X-RateLimit-Remaining') || 'N/A'}`;
+        diagnosticMsg += `\nX-RateLimit-Reset-After: ${tokenResponse.headers.get('X-RateLimit-Reset-After') || 'N/A'}`;
+        diagnosticMsg += `\nRetry-After: ${tokenResponse.headers.get('Retry-After') || 'N/A'}`;
+        diagnosticMsg += `\nCF-Ray: ${tokenResponse.headers.get('CF-Ray') || 'N/A'}`;
+        diagnosticMsg += `\nServer: ${tokenResponse.headers.get('Server') || 'N/A'}`;
+        
+        const errorText = await tokenResponse.text();
+        diagnosticMsg += `\nBody Snippet: ${errorText.substring(0, 150)}...`;
+        
+        try {
+          const parsed = JSON.parse(errorText);
+          diagnosticMsg += `\nJSON retry_after: ${parsed.retry_after ?? 'N/A'}, JSON global: ${parsed.global ?? 'N/A'}`;
+        } catch (e) {
+          // not json
+        }
+      } else {
+        const errorText = await tokenResponse.text();
+        diagnosticMsg += ` Body: ${errorText.substring(0, 100)}...`;
+      }
+      
+      console.error(diagnosticMsg);
       return res.status(400).json({ error: 'Failed to exchange code due to upstream error' });
     }
 
