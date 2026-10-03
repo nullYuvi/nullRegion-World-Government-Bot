@@ -7,6 +7,8 @@ export const config = {
   clientSecret: process.env.DISCORD_CLIENT_SECRET,
   redirectUri: process.env.DISCORD_REDIRECT_URI,
   jwtSecret: process.env.JWT_SECRET || 'secret',
+  dashboardAdminUsername: process.env.DASHBOARD_ADMIN_USERNAME,
+  dashboardAdminPasswordHash: process.env.DASHBOARD_ADMIN_PASSWORD_HASH,
   guildId: process.env.GUILD_ID,
   channels: {
     welcome: process.env.WELCOME_CHANNEL_ID,

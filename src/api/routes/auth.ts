@@ -1,134 +1,69 @@
 import { Router } from 'express';
 import { config } from '../../config';
 import jwt from 'jsonwebtoken';
-import { requireAuth, requireGuildAccess } from '../middleware/auth';
+import bcrypt from 'bcryptjs';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/login', (req, res) => {
-  const params = new URLSearchParams({
-    client_id: config.clientId || '',
-    redirect_uri: config.redirectUri || '',
-    response_type: 'code',
-    scope: 'identify guilds',
+const loginRateLimits = new Map<string, { count: number; lastAttempt: number }>();
+
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+
+  const now = Date.now();
+  const rl = loginRateLimits.get(ip) || { count: 0, lastAttempt: now };
+  if (now - rl.lastAttempt > 15 * 60 * 1000) {
+    rl.count = 0;
+  }
+  if (rl.count >= 5) {
+    return res.status(429).json({ error: 'Too many login attempts, try again later' });
+  }
+
+  if (!username || !password) {
+    rl.count += 1;
+    rl.lastAttempt = now;
+    loginRateLimits.set(ip, rl);
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  if (username !== config.dashboardAdminUsername) {
+    rl.count += 1;
+    rl.lastAttempt = now;
+    loginRateLimits.set(ip, rl);
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  if (!config.dashboardAdminPasswordHash) {
+    return res.status(500).json({ error: 'Admin password not configured' });
+  }
+
+  const isValid = await bcrypt.compare(password, config.dashboardAdminPasswordHash);
+  if (!isValid) {
+    rl.count += 1;
+    rl.lastAttempt = now;
+    loginRateLimits.set(ip, rl);
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  rl.count = 0;
+  loginRateLimits.set(ip, rl);
+
+  const token = jwt.sign(
+    { id: 'admin', username: config.dashboardAdminUsername, avatar: null },
+    config.jwtSecret,
+    { expiresIn: '24h' }
+  );
+
+  res.cookie('session', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
   });
-  res.redirect(`https://discord.com/api/oauth2/authorize?${params.toString()}`);
-});
 
-const usedCodes = new Set<string>();
-
-router.get('/callback', async (req, res) => {
-  const code = req.query.code as string;
-  if (!code) {
-    return res.status(400).json({ error: 'Code is required' });
-  }
-
-  // Prevent duplicate concurrent/rapid requests for the same authorization code
-  if (usedCodes.has(code)) {
-    console.warn('Duplicate OAuth callback request detected.');
-    return res.redirect(process.env.FRONTEND_URL || '/');
-  }
-  usedCodes.add(code);
-  setTimeout(() => usedCodes.delete(code), 5 * 60 * 1000); // Cleanup after 5 minutes
-
-  try {
-    const credentials = Buffer.from(`${config.clientId || ''}:${config.clientSecret || ''}`).toString('base64');
-    
-    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`,
-        'Accept': 'application/json',
-        'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: config.redirectUri || '',
-      }).toString(),
-    });
-
-    if (!tokenResponse.ok) {
-      const contentType = tokenResponse.headers.get('content-type') || 'unknown';
-      let diagnosticMsg = `OAuth Token Error [${tokenResponse.status}]: Content-Type: ${contentType}.`;
-      
-      if (tokenResponse.status === 429) {
-        diagnosticMsg += `\nRate Limit Headers:`;
-        diagnosticMsg += `\nX-RateLimit-Scope: ${tokenResponse.headers.get('X-RateLimit-Scope') || 'N/A'}`;
-        diagnosticMsg += `\nX-RateLimit-Limit: ${tokenResponse.headers.get('X-RateLimit-Limit') || 'N/A'}`;
-        diagnosticMsg += `\nX-RateLimit-Remaining: ${tokenResponse.headers.get('X-RateLimit-Remaining') || 'N/A'}`;
-        diagnosticMsg += `\nX-RateLimit-Reset-After: ${tokenResponse.headers.get('X-RateLimit-Reset-After') || 'N/A'}`;
-        diagnosticMsg += `\nRetry-After: ${tokenResponse.headers.get('Retry-After') || 'N/A'}`;
-        diagnosticMsg += `\nCF-Ray: ${tokenResponse.headers.get('CF-Ray') || 'N/A'}`;
-        diagnosticMsg += `\nServer: ${tokenResponse.headers.get('Server') || 'N/A'}`;
-        
-        const errorText = await tokenResponse.text();
-        diagnosticMsg += `\nBody Snippet: ${errorText.substring(0, 150)}...`;
-        
-        try {
-          const parsed = JSON.parse(errorText);
-          diagnosticMsg += `\nJSON retry_after: ${parsed.retry_after ?? 'N/A'}, JSON global: ${parsed.global ?? 'N/A'}`;
-        } catch (e) {
-          // not json
-        }
-      } else {
-        const errorText = await tokenResponse.text();
-        diagnosticMsg += ` Body: ${errorText.substring(0, 100)}...`;
-      }
-      
-      console.error(diagnosticMsg);
-      return res.status(400).json({ error: 'Failed to exchange code due to upstream error' });
-    }
-
-    const contentType = tokenResponse.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      console.error(`OAuth Token Error: Expected JSON, got ${contentType}`);
-      return res.status(400).json({ error: 'Invalid response format from Discord' });
-    }
-
-    const tokenData = await tokenResponse.json();
-    if (tokenData.error) {
-      return res.status(400).json({ error: tokenData.error_description || 'Failed to exchange code' });
-    }
-
-    const userResponse = await fetch('https://discord.com/api/users/@me', {
-      headers: { 
-        authorization: `Bearer ${tokenData.access_token}`,
-        'Accept': 'application/json',
-        'User-Agent': 'DiscordBot (https://nullregion-world-government-bot.onrender.com, 1.0.0)'
-      },
-    });
-    
-    if (!userResponse.ok) {
-       const userErrorText = await userResponse.text();
-       const userContentType = userResponse.headers.get('content-type') || 'unknown';
-       console.error(`OAuth User Data Error [${userResponse.status}]: Content-Type: ${userContentType}. Body: ${userErrorText.substring(0, 100)}...`);
-       return res.status(400).json({ error: 'Failed to fetch user data due to upstream error' });
-    }
-
-    const userContentType = userResponse.headers.get('content-type') || '';
-    if (!userContentType.includes('application/json')) {
-       console.error(`OAuth User Data Error: Expected JSON, got ${userContentType}`);
-       return res.status(400).json({ error: 'Invalid user data format from Discord' });
-    }
-
-    const userData = await userResponse.json();
-
-    const token = jwt.sign({ id: userData.id, username: userData.username, avatar: userData.avatar }, config.jwtSecret, { expiresIn: '7d' });
-
-    res.cookie('session', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    res.redirect(process.env.FRONTEND_URL || '/');
-  } catch (err) {
-    console.error('OAuth Callback Error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+  res.json({ success: true });
 });
 
 router.post('/logout', (req, res) => {
@@ -136,10 +71,10 @@ router.post('/logout', (req, res) => {
   res.json({ success: true });
 });
 
-router.get('/me', requireAuth, requireGuildAccess, (req: any, res) => {
+router.get('/me', requireAuth, (req: any, res) => {
   res.json({
     user: req.user,
-    access: req.userAccess
+    access: { isOwner: true, isAdmin: true, isMod: true }
   });
 });
 
